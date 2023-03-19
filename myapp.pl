@@ -54,6 +54,7 @@ get '/load' => sub ($c) {
 			send_db(
 				$c->db,
 				'message',
+				# 2012-02-13 14:39:22 1RwtJa-0009RI-KL <= tpxmuwr@somehost.ru H=mail.somehost.com [84.154.134.45] P=esmtp S=1716 id=120213143628.BLOCKED.453962@whois.somehost.ru
 				$portions[2], join( ' ', $portions[0], $portions[1] ), join( ' ', @portions[4..$#portions] )
 			);
 			$message_count++;
@@ -62,14 +63,17 @@ get '/load' => sub ($c) {
 
 			# Нет ID
 			if ( length($portions[2]) != 16 ) {
+				# 2012-02-13 15:00:55 SMTP connection from [109.70.26.4] (TCP/IP connection count = 1)
 				@values = ( '', join(' ', $portions[0], $portions[1]), join(' ', @portions[2..$#portions]), '' );
 			}
 			# Есть флаг
 			elsif ( $flags{ $portions[3] } ) {
+				# 2012-02-13 15:00:55 1RwteR-000Om4-65 == psqgg@yandex.ru R=dnslookup T=remote_smtp defer (-1): domain matches queue_smtp_domains, or -odqs set
 				@values = ( $portions[2], join(' ', $portions[0], $portions[1]), join(' ', @portions[5..$#portions]), $portions[4] );
 			}
 			# Есть ID, но нет флага
 			else {
+				# 2012-02-13 15:00:57 1RwtdI-0000Ac-TM Completed
 				@values = ( $portions[2], join(' ', $portions[0], $portions[1]), join(' ', @portions[3..$#portions]), '' );
 			}
 
@@ -85,7 +89,7 @@ get '/load' => sub ($c) {
 get '/search' => sub ($c) {
 	my $query = $c->param('query');
 
-	my @messages = $c->db->selectall_array("SELECT created, str, int_id FROM message WHERE str LIKE ? ORDER BY int_id, created LIMIT 100", undef, sprintf( '%%%s%%', $query));
+	my @messages = $c->db->selectall_array("SELECT created, str, int_id FROM message WHERE SUBSTRING_INDEX(str, ' ', 1) LIKE ? ORDER BY int_id, created LIMIT 100", undef, sprintf( '%%%s%%', $query));
 	my @logs = $c->db->selectall_array("SELECT created, str, int_id FROM log WHERE address LIKE ? ORDER BY int_id, created LIMIT 100", undef, sprintf( '%%%s%%', $query));
 	my @rows = sort { $a->[2] cmp $b->[2] || $a->[0] cmp $b->[0] } ( @messages, @logs );
 	my $is_exceeded = @rows > 100 ? 1 : 0;

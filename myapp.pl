@@ -4,145 +4,145 @@ use strict;
 use Mojolicious::Lite -signatures;
 
 plugin Database => {
-	dsn => 'dbi:mysql:dbname=gaz',
-	username => 'worker',
-	password => '',
-	no_disconnect => 1,
-	dbi_attr => { 'AutoCommit' => 1, 'RaiseError' => 1, 'PrintError' =>1 },
-	on_connect => sub {
-		my $dbh = shift or die $DBI::errstr;
-	}
+  dsn => 'dbi:mysql:dbname=gaz',
+  username => 'worker',
+  password => '',
+  no_disconnect => 1,
+  dbi_attr => { 'AutoCommit' => 1, 'RaiseError' => 1, 'PrintError' =>1 },
+  on_connect => sub {
+    my $dbh = shift or die $DBI::errstr;
+  }
 };
 
 my %flags = (
-	'<=' => 4, # РЈРєР°Р·Р°РЅС‹ РІРµСЃР° РґР»СЏ СЃРѕСЂС‚РёСЂРѕРІРєРё РїРѕ С…СЂРѕРЅРѕР»РѕРіРёРё
-	'**' => 3,
-	'==' => 3,
-	'=>' => 2,
-	'->' => 1,
+  '<=' => 4, # Указаны веса для сортировки по хронологии
+  '**' => 3,
+  '==' => 3,
+  '=>' => 2,
+  '->' => 1,
 );
 
 sub send_db {
-	my ( $dbh, $statement, %values ) = @_;
+  my ( $dbh, $statement, %values ) = @_;
 
-	my %queries = (
-		message => 'INSERT INTO message (int_id, created, str, id) VALUES (?, ?, ?, ?)',
-		log     => 'INSERT INTO log (int_id, created, str, address) VALUES (?, ?, ?, ?)',
-	);
+  my %queries = (
+    message => 'INSERT INTO message (int_id, created, str, id) VALUES (?, ?, ?, ?)',
+    log     => 'INSERT INTO log (int_id, created, str, address) VALUES (?, ?, ?, ?)',
+  );
 
-	my $sth = $dbh->prepare($queries{$statement});
-	$sth->execute( map { $values{$_} } (
-			qw/ int_id created str /,
-			$statement eq 'message' ? 'id' : $statement eq 'log' ? 'address' : ''
-	) );
+  my $sth = $dbh->prepare($queries{$statement});
+  $sth->execute( map { $values{$_} } (
+      qw/ int_id created str /,
+      $statement eq 'message' ? 'id' : $statement eq 'log' ? 'address' : ''
+  ) );
 }
 
 sub check_datetime {
-	my ( $dbh, $value ) = @_;
-	
-	return $dbh->selectall_array( "SELECT TO_SECONDS(?) IS NOT NULL AS valid", undef, $value );
+  my ( $dbh, $value ) = @_;
+
+  return $dbh->selectall_array( "SELECT TO_SECONDS(?) IS NOT NULL AS valid", undef, $value );
 }
 
 get '/load' => sub ($c) {
-	my ( $message_count, $log_count, $total_count ) = ( 0, 0, 0 );
+  my ( $message_count, $log_count, $total_count ) = ( 0, 0, 0 );
 
-	# РћС‡РёСЃС‚РєР° РґР°РЅРЅС‹С… РѕС‚ РїСЂРµРґС‹РґСѓС‰РµР№ Р·Р°РіСЂСѓР·РєРё
-	$c->db->do("DELETE FROM message");
-	$c->db->do("DELETE FROM log");
+  # Очистка данных от предыдущей загрузки
+  $c->db->do("DELETE FROM message");
+  $c->db->do("DELETE FROM log");
 
-	open my $fh, '<', 'out';
-	while (my $row = <$fh>) {
-		chomp $row;
-		$total_count++;
+  open my $fh, '<', 'out';
+  while (my $row = <$fh>) {
+    chomp $row;
+    $total_count++;
 
-		my ( %values, $possible_flag, $rest_row );
-		# РџРµСЂРІС‹Рµ РїРѕР»СЏ СЃ РїРѕСЃС‚РѕСЏРЅРЅС‹Рј СЂР°Р·РјРµСЂРѕРј - РІС‹РґРµР»СЏСЋС‚СЃСЏ РїРѕ СЂР°Р·РјРµСЂСѓ РїРѕР»РµР№
-		# РџРѕР»Рµ С„Р»Р°РіР° РЅРµ РІСЃРµРіРґР° Р·Р°РїРѕР»РЅРµРЅРѕ С„Р»Р°РіРѕРј - СѓС‡РёС‚С‹РІР°РµС‚СЃСЏ СЌС‚Рѕ
-		( $values{created}, $values{int_id}, $possible_flag, $rest_row ) = unpack 'A19xA16xA2A*', $row;
+    my ( %values, $possible_flag, $rest_row );
+    # Первые поля с постоянным размером - выделяются по размеру полей
+    # Поле флага не всегда заполнено флагом - учитывается это
+    ( $values{created}, $values{int_id}, $possible_flag, $rest_row ) = unpack 'A19xA16xA2A*', $row;
 
-		# РџСЂРѕРІРµСЂРєР°, С‡С‚Рѕ Р‘Р” РїРѕРЅРёРјР°РµС‚ РІС‹РґРµР»РµРЅРЅРѕРµ РёР· СЃС‚СЂРѕРєРё РІСЂРµРјСЏ
-		unless ( check_datetime $c->db, $values{created} ) {
-			app->log->error( sprintf "Not valid date: %s", $row );
-			next;
-		} else {
-			$values{str} = join ' ', $values{int_id}, ( $possible_flag . $rest_row );
-		}
+    # Проверка, что БД понимает выделенное из строки время
+    unless ( check_datetime $c->db, $values{created} ) {
+      app->log->error( sprintf "Not valid date: %s", $row );
+      next;
+    } else {
+      $values{str} = join ' ', $values{int_id}, ( $possible_flag . $rest_row );
+    }
 
-		# РџСЂРѕРІРµСЂРєР° РЅР° РѕР±СЏР·Р°С‚РµР»СЊРЅРѕРµ РїРѕР»Рµ int_id
-		# 2012-02-13 15:00:55 SMTP connection from [109.70.26.4] (TCP/IP connection count = 1)
-		unless ( $values{int_id} =~ /^\w{6}-\w{6}-\w\w$/ ) {
-			app->log->warn( sprintf "Not valid int_id: %s", $row );
-			next;
-		}
+    # Проверка на обязательное поле int_id
+    # 2012-02-13 15:00:55 SMTP connection from [109.70.26.4] (TCP/IP connection count = 1)
+    unless ( $values{int_id} =~ /^\w{6}-\w{6}-\w\w$/ ) {
+      app->log->warn( sprintf "Not valid int_id: %s", $row );
+      next;
+    }
 
-		# РћСЃС‚Р°Р»СЊРЅС‹Рµ РїРѕР»СЏ РІС‹РґРµР»СЏСЋС‚СЃСЏ РїРѕ РїСЂРµРґРїРѕР»РѕР¶РµРЅРёСЏ, С‡С‚Рѕ РїРѕР»СЏ СЂР°Р·РґРµР»РµРЅС‹ РїСЂРѕР±РµР»РѕРј Рё РІСЃРµРіРґР° РЅР°С‡РёРЅР°СЋС‚СЃСЏ
-		# СЃ Р±СѓРєРІС‹ Рё Р·РЅР°РєР° СЂР°РІРЅРѕ. РќР°РїСЂРёРјРµСЂ " H=".
-		my ( $possible_address, %data ) = split /\s(\w=)/, $rest_row;
+    # Остальные поля выделяются по предположения, что поля разделены пробелом и всегда начинаются
+    # с буквы и знака равно. Например " H=".
+    my ( $possible_address, %data ) = split /\s(\w=)/, $rest_row;
 
-		# Р’ РїРѕР»Рµ S= РµСЃС‚СЊ id, РєРѕС‚РѕСЂС‹Р№ РІС‹РґРµР»СЏРµС‚СЃСЏ РїРѕ РўР—
-		( undef, $values{id} ) = split 'id=', $data{'S='} if $data{'S='};
-		if ( $values{id} && $flags{$possible_flag} && $flags{$possible_flag} == 4 ) {
-			# 2012-02-13 14:39:22 1RwtJa-0009RI-KL <= tpxmuwr@somehost.ru H=mail.somehost.com [84.154.134.45] P=esmtp S=1716 id=120213143628.BLOCKED.453962@whois.somehost.ru
-			send_db( $c->db, 'message', %values );
+    # В поле S= есть id, который выделяется по ТЗ
+    ( undef, $values{id} ) = split 'id=', $data{'S='} if $data{'S='};
+    if ( $values{id} && $flags{$possible_flag} && $flags{$possible_flag} == 4 ) {
+      # 2012-02-13 14:39:22 1RwtJa-0009RI-KL <= tpxmuwr@somehost.ru H=mail.somehost.com [84.154.134.45] P=esmtp S=1716 id=120213143628.BLOCKED.453962@whois.somehost.ru
+      send_db( $c->db, 'message', %values );
 
-			$message_count++;
-		} else {
-			# РЈРєР°Р·Р°РЅ С„Р»Р°Рі
-			if ( $flags{$possible_flag} ) {
-				# 2012-02-13 15:00:55 1RwteR-000Om4-65 == psqgg@yandex.ru R=dnslookup T=remote_smtp defer (-1): domain matches queue_smtp_domains, or -odqs set
-				# " psqgg@yandex.ru" - СѓР±РёСЂР°РµС‚СЃСЏ Р»РёРґРёСЂСѓСЋС‰РёР№ РїСЂРѕР±РµР»
-				( $values{address} ) = unpack 'xA*', $possible_address;
-			}
+      $message_count++;
+    } else {
+      # Указан флаг
+      if ( $flags{$possible_flag} ) {
+        # 2012-02-13 15:00:55 1RwteR-000Om4-65 == psqgg@yandex.ru R=dnslookup T=remote_smtp defer (-1): domain matches queue_smtp_domains, or -odqs set
+        # " psqgg@yandex.ru" - убирается лидирующий пробел
+        ( $values{address} ) = unpack 'xA*', $possible_address;
+      }
 
-			send_db( $c->db, 'log', %values );
+      send_db( $c->db, 'log', %values );
 
-			$log_count++;
-		}
-	}
-	close $fh;
+      $log_count++;
+    }
+  }
+  close $fh;
 
-	$c->render(template => 'load', messages => $message_count, logs => $log_count, total => $total_count );
+  $c->render(template => 'load', messages => $message_count, logs => $log_count, total => $total_count );
 };
 
 get '/search' => sub ($c) {
-	my $query = $c->param('query') || '';
+  my $query = $c->param('query') || '';
 
-	# Р’С‹Р±РѕСЂРєР° int_id СЃ СѓРєР°Р·Р°РЅРЅС‹Рј РїРѕР»СѓС‡Р°С‚РµР»РµРј СЃ Р»РёРјРёС‚РѕРј Р±РѕР»СЊС€Рµ 100 РґР»СЏ РІС‹РІРѕРґР° РЅР° С„РѕСЂРјРµ, С‡С‚Рѕ РґР°РЅРЅС‹С… Р±РѕР»СЊС€Рµ
-	my @int_ids = $c->db->selectall_array(
-		"SELECT DISTINCT int_id FROM log WHERE address LIKE ? ORDER BY int_id, created LIMIT 101",
-		undef,
-		sprintf( '%%%s%%', $query ),
-	);
-	# Р’С‹Р±РѕСЂРєР° Р·Р°РїРёСЃРµР№ СЃ РЅР°Р№РґРµРЅРЅС‹РјРё int_id СЃ Р»РёРјРёС‚РѕРј 150 С‡С‚Рѕ Р±С‹ СѓРјРµРЅСЊС€РёС‚СЊ СЂР°Р·РѕСЂРІР°РЅРЅРѕСЃС‚СЊ С…СЂРѕРЅРѕР»РѕРіРёРё,
-	# РєРѕС‚РѕСЂР°СЏ РЅРёР¶Рµ СЃРѕР±РёСЂР°РµС‚СЃСЏ РїРѕ С„Р»Р°РіР°Рј (РІСЂРµРјСЏ СЃР»РёС€РєРѕРј РґРёСЃРєСЂРµС‚РЅРѕ РґР»СЏ СЌС‚РѕРіРѕ)
-	my $sql = sprintf(
-		"
-			SELECT created, str, int_id FROM log WHERE int_id IN (%s)
-			UNION ALL SELECT created, str, int_id FROM message WHERE int_id IN (%s)
-			ORDER BY int_id LIMIT 150
-		",
-		( "'" . join( "','", map { $_->[0] } @int_ids ) . "'" ) x 2,
-	);
-	my @rows = $c->db->selectall_array($sql);
-	my $is_exceeded = @rows > 100 ? 1 : 0;
+  # Выборка int_id с указанным получателем с лимитом больше 100 для вывода на форме, что данных больше
+  my @int_ids = $c->db->selectall_array(
+    "SELECT DISTINCT int_id FROM log WHERE address LIKE ? ORDER BY int_id, created LIMIT 101",
+    undef,
+    sprintf( '%%%s%%', $query ),
+  );
+  # Выборка записей с найденными int_id с лимитом 150 что бы уменьшить разорванность хронологии,
+  # которая ниже собирается по флагам (время слишком дискретно для этого)
+  my $sql = sprintf(
+    "
+      SELECT created, str, int_id FROM log WHERE int_id IN (%s)
+      UNION ALL SELECT created, str, int_id FROM message WHERE int_id IN (%s)
+      ORDER BY int_id LIMIT 150
+    ",
+    ( "'" . join( "','", map { $_->[0] } @int_ids ) . "'" ) x 2,
+  );
+  my @rows = $c->db->selectall_array($sql);
+  my $is_exceeded = @rows > 100 ? 1 : 0;
 
-	# Р•СЃР»Рё РІ РѕРґРЅСѓ СЃРµРєСѓРЅРґСѓ РїСЂРѕС…РѕРґРёС‚ РІСЃСЏ С†РµРїРѕС‡РєР° РѕР±СЂР°Р±РѕС‚РєРё РїРѕС‡С‚С‹, С‚Рѕ СЃРѕСЂС‚РёСЂРѕРІРєР° РїРѕ С„Р»Р°РіСѓ РґР»СЏ СѓРґРѕР±РЅРѕРіРѕ
-	# РІРѕСЃРїСЂРёСЏС‚РёСЏ С…СЂРѕРЅРѕР»РѕРіРёРё - РїРѕСЃС‚СѓРїР»РµРЅРёРµ, РїРѕРїС‹С‚РєРё РѕС‚РїСЂР°РІРєРё, РѕС‚РїСЂР°РІРєР°, Р·Р°РІРµСЂС€Р°СЋС‰РµРµ СЃРѕРѕР±С‰РµРЅРёРµ.
-	# РўР°Рє РєР°Рє СЃС‚СЂСѓРєС‚СѓСЂР° Р‘Р” РѕРїРёСЃР°РЅР° РІ РўР— Рё РЅРµ РїСЂРµРґСѓСЃРјР°С‚СЂРёРІР°РµС‚ РєРѕР»РѕРЅРєСѓ С„Р»Р°РіР°, С‚Рѕ СЃРѕР±РёСЂР°РµС‚СЃСЏ "РЅР° Р»РµС‚Сѓ".
-	# Р”РѕР±Р°РІР»СЏРµС‚СЃСЏ РІРѕР·РјРѕР¶РЅС‹Р№ С„Р»Р°Рі Рє РІС‹Р±РѕСЂРєРµ
-	push @$_, unpack 'x17A2', $_->[1] for @rows;
-	@rows = sort {
-		$a->[2] cmp $b->[2]                                               # int_id
-		|| $a->[0] cmp $b->[0]                                            # created
-		|| ( $flags{ $b->[3] } || 0 ) <=> ( $flags{ $a->[3] } || 0 )      # flag
-	} @rows;
+  # Если в одну секунду проходит вся цепочка обработки почты, то сортировка по флагу для удобного
+  # восприятия хронологии - поступление, попытки отправки, отправка, завершающее сообщение.
+  # Так как структура БД описана в ТЗ и не предусматривает колонку флага, то собирается "на лету".
+  # Добавляется возможный флаг к выборке
+  push @$_, unpack 'x17A2', $_->[1] for @rows;
+  @rows = sort {
+    $a->[2] cmp $b->[2]                                               # int_id
+    || $a->[0] cmp $b->[0]                                            # created
+    || ( $flags{ $b->[3] } || 0 ) <=> ( $flags{ $a->[3] } || 0 )      # flag
+  } @rows;
 
-	@rows = @rows[ 0 .. 99 ];
-	$c->render( template => 'search', rows => \@rows, query => $query, is_exceeded => $is_exceeded );
+  @rows = @rows[ 0 .. 99 ];
+  $c->render( template => 'search', rows => \@rows, query => $query, is_exceeded => $is_exceeded );
 };
 
 get '/' => sub ($c) {
-	$c->render(template => 'index');
+  $c->render(template => 'index');
 };
 
 app->start;
@@ -159,14 +159,14 @@ __DATA__
 <input type="submit">
 </form>
 % if ( ref $rows eq 'ARRAY' ) {
-	% if ( $is_exceeded ) {
-	<br><b>More than 100</b>
-	% }
-	<div>
-		% for my $row ( @$rows ) {
-		<p><%= $row->[0] %> <%= $row->[1] %></p>
-		% }
-	</div>
+  % if ( $is_exceeded ) {
+  <br><b>More than 100</b>
+  % }
+  <div>
+    % for my $row ( @$rows ) {
+    <p><%= $row->[0] %> <%= $row->[1] %></p>
+    % }
+  </div>
 % }
 
 @@ index.html.ep
